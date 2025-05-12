@@ -123,7 +123,7 @@ This project uses Postman for testing its API endpoints.
 I have provided the postman collection file, import it in your postman collection and set the environment variables.
 Variable : zeetube  Value : http://localhost:8000/api/v1/
 
-File name: `postman_collection.json`
+File name: `zeetube.postman_collection.json`
 
 The tests cover the following areas:
 

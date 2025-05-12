@@ -290,13 +290,25 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     throw new ApiError(400, "File is required");
   }
 
+  //delete old avatar
+  const user = await User.findById(req.user?._id);
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  if (user.avatar) {
+    const publicId = user.avatar.split("/").pop().split(".")[0]; // Extract Cloudinary public_id
+    await cloudinary.uploader.destroy(publicId); // Delete old avatar from Cloudinary
+  }
+
+  //upload new avatar
   const avatar = await uploadOnCloudinary(avatarLocalPath);
 
   if (!avatar.url) {
     throw new ApiError(500, "Something went wrong while uploading the avatar");
   }
 
-  const user = await User.findByIdAndUpdate(
+  const userDoc = await User.findByIdAndUpdate(
     req.user?._id,
     {
       $set: {
@@ -306,11 +318,9 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     { new: true }
   ).select("-password -refreshToken");
 
-  //delete old image (TODO)
-
   res
     .status(200)
-    .json(new ApiResponse(200, user, "Avatar updated successfully"));
+    .json(new ApiResponse(200, userDoc, "Avatar updated successfully"));
 });
 
 const updateUserCoverImage = asyncHandler(async (req, res) => {
@@ -320,6 +330,18 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "File is required");
   }
 
+  //delete old coverImage
+  const user = await User.findById(req.user?._id);
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  if (user.coverImage) {
+    const publicId = user.coverImage.split("/").pop().split(".")[0];
+    await cloudinary.uploader.destroy(publicId);
+  }
+
+  //upload new coverImage
   const coverImage = await uploadOnCloudinary(coverImageLocalPath);
 
   if (!coverImage.url) {
@@ -329,7 +351,7 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
     );
   }
 
-  const user = await User.findByIdAndUpdate(
+  const userDoc = await User.findByIdAndUpdate(
     req.user?._id,
     {
       $set: {
@@ -341,7 +363,134 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
 
   res
     .status(200)
-    .json(new ApiResponse(200, user, "Cover image updated successfully"));
+    .json(new ApiResponse(200, userDoc, "Cover image updated successfully"));
+});
+
+const getUserChannelProfile = asyncHandler(async (req, res) => {
+  const { username } = req.params;
+
+  if (!username?.trim()) {
+    throw new ApiError(400, "username is missing");
+  }
+
+  //Aggregation Pipeline
+  const channel = await User.aggregate([
+    {
+      $match: {
+        username: username?.toLowerCase(),
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "channel",
+        as: "subscribers",
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "subscriber",
+        as: "subscribedTo",
+      },
+    },
+    {
+      $addFields: {
+        subscribersCount: {
+          $size: "$subscribers",
+        },
+        channelsSubscribedToCount: {
+          $size: "$subscribedTo",
+        },
+        isSubscribed: {
+          $cond: {
+            if: { $in: [req.user?._id, "$subscribers.subscriber"] },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        fullName: 1,
+        username: 1,
+        subscribersCount: 1,
+        channelsSubscribedToCount: 1,
+        isSubscribed: 1,
+        avatar: 1,
+        coverImage: 1,
+        email: 1,
+      },
+    },
+  ]);
+
+  // If no channel is found
+  if (!channel?.length) {
+    throw new ApiError(404, "channel does not exist");
+  }
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, channel[0], "User channel fetched successfully")
+    );
+});
+
+const getWatchHistory = asyncHandler(async (req, res) => {
+  const user = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(req.user._id), // Convert user ID to ObjectId and match it in the database
+      },
+    },
+    {
+      $lookup: {
+        from: "videos",
+        localField: "watchHistory",
+        foreignField: "_id",
+        as: "watchHistory",
+        pipeline: [
+          // A sub-pipeline to fetch additional details
+          {
+            $lookup: {
+              from: "users",
+              localField: "owner",
+              foreignField: "_id",
+              as: "owner",
+              pipeline: [
+                // Another sub-pipeline to filter required fields
+                {
+                  $project: {
+                    fullName: 1,
+                    username: 1,
+                    avatar: 1,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              owner: {
+                $first: "$owner",
+              },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      user[0].watchHistory, // Extract watch history from the first (and only) user in the result
+      "Watch history fetched successfully"
+    )
+  );
 });
 
 export {
@@ -354,4 +503,6 @@ export {
   updateAccountDetails,
   updateUserAvatar,
   updateUserCoverImage,
+  getUserChannelProfile,
+  getWatchHistory,
 };
